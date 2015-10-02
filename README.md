@@ -18,7 +18,7 @@ Python 2.7
 
 ```
     $ git clone https://github.com/fengyouchao/pysocks ~/pysocks
-    $ python ~/pysokcs/socks5.py
+    $ python ~/pysocks/socks5.py
 ```
 See options
 
