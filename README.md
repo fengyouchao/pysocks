@@ -7,7 +7,7 @@
 * UDP ASSOCIATE - NO
 * BIND - NO
 * No Authentication Required - YES
-* USERNAME/PASSWORD Authentication - NO
+* USERNAME/PASSWORD Authentication - YES
 * GSS-API - NO
 
 ## Environment

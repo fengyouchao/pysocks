@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-from SocketServer import ThreadingTCPServer, StreamRequestHandler, DatagramRequestHandler
+from SocketServer import BaseServer, ThreadingTCPServer, StreamRequestHandler, DatagramRequestHandler
 import logging
 from socket import socket, AF_INET, SOCK_STREAM
+import sys
 import thread
 import struct
-import sys
 
-__author__ = 'fengyouchao'
+__author__ = 'Youchao Feng'
 
 
 def byte_to_int(b):
@@ -56,9 +56,19 @@ class Session(object):
     index = 0
 
     def __init__(self, client_socket):
-        self.index += 1
-        self._id = self.index
-        self._client_socket = client_socket
+        Session.index += 1
+        self.__id = Session.index
+        self.__client_socket = client_socket
+        self._attr = {}
+
+    def get_id(self):
+        return self.__id
+
+    def set_attr(self, key, value):
+        self._attr[key] = value
+
+    def get_client_socket(self):
+        return self.__client_socket
 
 
 class AddressType(object):
@@ -87,7 +97,7 @@ class SocketPipe(object):
         self._socket2 = socket2
         self.__running = False
 
-    def __transfer(self, socket1, socket2, name='pipe'):
+    def __transfer(self, socket1, socket2):
         while self.__running:
             try:
                 data = socket1.recv(self.BUFFER_SIZE)
@@ -95,7 +105,7 @@ class SocketPipe(object):
                     socket2.sendall(data)
                 else:
                     break
-            except IOError, e:
+            except IOError:
                 self.stop()
         self.stop()
 
@@ -114,11 +124,12 @@ class SocketPipe(object):
 
 
 class CommandExecutor(object):
-    def __init__(self, client, remote_server_host, remote_server_port):
+    def __init__(self, remote_server_host, remote_server_port, session):
         self.__proxy_socket = socket(AF_INET, SOCK_STREAM)
-        self._remote_server_host = remote_server_host
-        self._remote_server_port = remote_server_port
-        self._client = client
+        self.__remote_server_host = remote_server_host
+        self.__remote_server_port = remote_server_port
+        self.__client = session.get_client_socket()
+        self.__session = session
 
     def do_connect(self):
         """
@@ -127,12 +138,12 @@ class CommandExecutor(object):
         """
         result = self.__proxy_socket.connect_ex(self.__get_address())
         if result == 0:
-            self._client.send(b'\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00')
-            socket_pipe = SocketPipe(self._client, self.__proxy_socket)
+            self.__client.send(b'\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00')
+            socket_pipe = SocketPipe(self.__client, self.__proxy_socket)
             socket_pipe.start()
             while socket_pipe.is_running():
                 pass
-            logging.info("Thread[%s] connection closed" % thread.get_ident())
+            logging.info("Session[%s] closed" % self.__session.get_id())
 
     def do_bind(self):
         pass
@@ -141,27 +152,72 @@ class CommandExecutor(object):
         pass
 
     def __get_address(self):
-        return self._remote_server_host, self._remote_server_port
+        return self.__remote_server_host, self.__remote_server_port
+
+
+class User(object):
+    def __init__(self, username, password):
+        self.__username = username
+        self.__password = password
+
+    def get_username(self):
+        return self.__username
+
+    def get_password(self):
+        return self.__password
+
+    def __repr__(self):
+        return '<user: username=%s, password=%s>' % (self.get_username(), self.__password)
+
+
+class UserManager(object):
+    def __init__(self):
+        self.__users = {}
+
+    def add_user(self, user):
+        self.__users[user.get_username()] = user
+
+    def remove_user(self, username):
+        if username in self.__users:
+            del self.__users[username]
+
+    def check(self, username, password):
+        if username in self.__users and self.__users[username].get_password() == password:
+            return True
+        else:
+            return False
+
+    def get_user(self, username):
+        return self.__users[username]
+
+    def get_users(self):
+        return self.__users
 
 
 class Socks5RequestHandler(StreamRequestHandler):
-    def handle(self):
-        logging.info('Thread[%s] Handle connection from %s:%d' % (
-            thread.get_ident(), self.client_address[0], self.client_address[1]))
-        self.handle_request()
+    def __init__(self, request, client_address, server):
+        StreamRequestHandler.__init__(self, request, client_address, server)
 
-    def handle_request(self):
+    def handle(self):
+        session = Session(self.connection)
+        logging.info('Create session[%s] for %s:%d' % (
+            1, self.client_address[0], self.client_address[1]))
         socks_client = self.connection
         socks_client.recv(1)
         method_num, = struct.unpack('b', socks_client.recv(1))
         methods = struct.unpack('b' * method_num, socks_client.recv(method_num))
-        if methods.__contains__(SocksMethod.NO_AUTHENTICATION_REQUIRED):
+        auth = self.server.is_auth()
+        if methods.__contains__(SocksMethod.NO_AUTHENTICATION_REQUIRED) and not auth:
             socks_client.send(b"\x05\x00")
-        # elif methods.__contains__(SocksMethod.USERNAME_PASSWORD):
-        #     socks_client.send(b"\x05\x02")
+        elif methods.__contains__(SocksMethod.USERNAME_PASSWORD) and auth:
+            socks_client.send(b"\x05\x02")
+            if not self.__do_username_password_auth():
+                logging.info('Session[%d] authentication failed' % session.get_id())
+                logging.info('Session[%d] closed' % session.get_id())
+                return
         else:
             socks_client.send(b"\x05\xFF")
-            return None
+            return
         version, command, reserved, atype = struct.unpack('b' * 4, socks_client.recv(4))
         host = None
         port = None
@@ -175,67 +231,138 @@ class Socks5RequestHandler(StreamRequestHandler):
             p1, p2 = struct.unpack('b' * 2, socks_client.recv(2))
             port = port_from_byte(p1, p2)
 
-        command_executor = CommandExecutor(socks_client, host, port)
+        command_executor = CommandExecutor(host, port, session)
         if command == SocksCommand.CONNECT:
-            logging.info("Thread[%s] Request connect %s:%d" % (thread.get_ident(), host, port))
+            logging.info("Session[%s] Request connect %s:%d" % (session.get_id(), host, port))
             command_executor.do_connect()
 
+    def __do_username_password_auth(self):
+        socket = self.connection
+        socket.recv(1)
+        length = byte_to_int(struct.unpack('b', socket.recv(1))[0])
+        username = socket.recv(length)
+        length = byte_to_int(struct.unpack('b', socket.recv(1))[0])
+        password = socket.recv(length)
+        user_manager = self.server.get_user_manager()
+        if user_manager.check(username, password):
+            socket.send(b"\x01\x00")
+            return True
+        else:
+            socket.send(b"\x01\x01")
 
-class User(object):
-    def __init__(self, username, password):
-        self._username = username
-        self._password = password
+            socket.close()
+            return False
 
 
-class Socks5Server(object):
-    def __init__(self, port, enable_log=False, log_file='socks.log', console_log=False):
-        self._port = port
-        self._server = ThreadingTCPServer(('', port), Socks5RequestHandler)
-        if enable_log:
-            logging.basicConfig(level=logging.DEBUG,
-                                format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
-                                datefmt='%a, %d %b %Y %H:%M:%S',
-                                filename=log_file,
-                                filemode='a')
-            console = logging.StreamHandler()
-            console.setLevel(logging.INFO)
-            formatter = logging.Formatter('%(asctime)s %(levelname)-5s %(filename)s %(lineno)-3d - %(message)s')
-            console.setFormatter(formatter)
-            logging.getLogger('').addHandler(console)
+class Socks5Server(ThreadingTCPServer):
+    """
+    SOCKS5 proxy server
+    """
 
-    def start(self):
-        logging.info("Create SOCKS5 server at port %d" % self._port)
-        self._server.serve_forever()
+    def __init__(self, port, auth=False, user_manager=UserManager()):
+        ThreadingTCPServer.__init__(self, ('', port), Socks5RequestHandler)
+        self.__port = port
+        self.__users = {}
+        self.__auth = auth
+        self.__user_manager = user_manager
+        self.__sessions = {}
 
-    def shutdown(self):
-        self._server.shutdown()
+    def serve_forever(self, poll_interval=0.5):
+        logging.info("Create SOCKS5 server at port %d" % self.__port)
+        ThreadingTCPServer.serve_forever(self, poll_interval)
+
+    def finish_request(self, request, client_address):
+        BaseServer.finish_request(self, request, client_address)
+
+    def is_auth(self):
+        return self.__auth
+
+    def set_auth(self, auth):
+        self.__auth = auth
+
+    def get_all_managed_session(self):
+        return self.__sessions
+
+    def get_bind_port(self):
+        return self.__port
+
+    def get_user_manager(self):
+        return self.__user_manager
+
+    def set_user_manager(self, user_manager):
+        self.__user_manager = user_manager
 
 
 def show_help():
     print 'Usage:'
-    print '  --port=<val>             Sets server port, default 1080'
-    print '  --enable-log=true|false  Logging on, default true'
-    print '  -h                       Show Help'
+    print '  --port=<val>         Sets server port, default 1080'
+    print '  --log=true|false     Logging on, default true'
+    print '  --auth:<user:pwd>    Use username/password authentication'
+    print '                       Example:'
+    print '                         Create user \"admin\" with password \"1234\":'
+    print '                           --auth=admin:1234 '
+    print '                         Create tow users:'
+    print '                           --auth=admin:1234,root:1234'
+    print '  -h                   Show Help'
 
 
 def main():
     port = 1080
     enable_log = True
-    for arg in sys.argv:
+    log_file = 'socks.log'
+    auth = False
+    user_manager = UserManager()
+    for arg in sys.argv[1:]:
         if arg.startswith('--port='):
-            port = int(arg.split('=')[1])
-        if arg == '-h':
+            try:
+                port = int(arg.split('=')[1])
+            except ValueError:
+                print '--port=<val>  <val> should be a number'
+                sys.exit()
+        elif arg.startswith('--auth'):
+            auth = True
+            users = arg.split('=')[1]
+            for user in users.split(','):
+                user_pwd = user.split(':')
+                user_manager.add_user(User(user_pwd[0], user_pwd[1]))
+        elif arg == '-h':
             show_help()
             sys.exit()
-        if arg.startswith('--enable-log='):
-            enable_log = bool(arg.split('=')[1])
-    socks5_server = Socks5Server(port, enable_log)
+        elif arg.startswith('--log='):
+            value = arg.split('=')[1]
+            if value == 'true':
+                enable_log = True
+            elif value == 'false':
+                enable_log = False
+            else:
+                print '--log=<val>  <val> should be true or false'
+                sys.exit()
+        else:
+            print 'Unknown argument:%s' % arg
+            sys.exit()
+    if enable_log:
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
+                            datefmt='%a, %d %b %Y %H:%M:%S',
+                            filename=log_file,
+                            filemode='a')
+        console = logging.StreamHandler()
+        console.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s %(levelname)-5s %(filename)s %(lineno)-3d - %(message)s')
+        console.setFormatter(formatter)
+        logging.getLogger('').addHandler(console)
+
+    socks5_server = Socks5Server(port, auth, user_manager)
     try:
-        socks5_server.start()
-    except KeyboardInterrupt, e:
+        socks5_server.serve_forever()
+    except KeyboardInterrupt:
+        socks5_server.server_close()
         socks5_server.shutdown()
         logging.info("SOCKS5 server shutdown")
 
 
 if __name__ == '__main__':
     main()
+    # if not True:
+    #     print "women"
+    # print "h"
