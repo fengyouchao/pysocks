@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from SocketServer import BaseServer, ThreadingTCPServer, StreamRequestHandler, DatagramRequestHandler
+from SocketServer import BaseServer, ThreadingTCPServer, StreamRequestHandler
 import logging
 from socket import socket, AF_INET, SOCK_STREAM
 import sys
@@ -52,6 +52,16 @@ def get_command_name(value):
         return None
 
 
+def build_command_response(reply):
+    start = b'\x05%s\x00\x01\x00\x00\x00\x00\x00\x00'
+    return start % reply.get_byte_string()
+
+
+def close_session(session):
+    session.get_client_socket().close()
+    logging.info("Session[%s] closed" % session.get_id())
+
+
 class Session(object):
     index = 0
 
@@ -87,6 +97,46 @@ class SocksMethod(object):
     NO_AUTHENTICATION_REQUIRED = 0
     GSS_API = 1
     USERNAME_PASSWORD = 2
+
+
+class ServerReply(object):
+    def __init__(self, value):
+        self.__value = value
+
+    def get_byte_string(self):
+        if self.__value == 0:
+            return b'\x00'
+        elif self.__value == 1:
+            return b'\x01'
+        elif self.__value == 2:
+            return b'\x02'
+        elif self.__value == 3:
+            return b'\x03'
+        elif self.__value == 4:
+            return b'\x04'
+        elif self.__value == 5:
+            return b'\x05'
+        elif self.__value == 6:
+            return b'\x06'
+        elif self.__value == 7:
+            return b'\x07'
+        elif self.__value == 8:
+            return b'\x08'
+
+    def get_value(self):
+        return self.__value
+
+
+class ReplyType(object):
+    SUCCEEDED = ServerReply(0)
+    GENERAL_SOCKS_SERVER_FAILURE = ServerReply(1)
+    CONNECTION_NOT_ALLOWED_BY_RULESET = ServerReply(2)
+    NETWORK_UNREACHABLE = ServerReply(3)
+    HOST_UNREACHABLE = ServerReply(4)
+    CONNECTION_REFUSED = ServerReply(5)
+    TTL_EXPIRED = ServerReply(6)
+    COMMAND_NOT_SUPPORTED = ServerReply(7)
+    ADDRESS_TYPE_NOT_SUPPORTED = ServerReply(8)
 
 
 class SocketPipe(object):
@@ -138,12 +188,18 @@ class CommandExecutor(object):
         """
         result = self.__proxy_socket.connect_ex(self.__get_address())
         if result == 0:
-            self.__client.send(b'\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00')
+            self.__client.send(build_command_response(ReplyType.SUCCEEDED))
             socket_pipe = SocketPipe(self.__client, self.__proxy_socket)
             socket_pipe.start()
             while socket_pipe.is_running():
                 pass
-            logging.info("Session[%s] closed" % self.__session.get_id())
+        elif result == 60:
+            self.__client.send(build_command_response(ReplyType.TTL_EXPIRED))
+        elif result == 61:
+            self.__client.send(build_command_response(ReplyType.NETWORK_UNREACHABLE))
+        else:
+            logging.error('Connection Error:[%s] is unknown' % result)
+            self.__client.send(build_command_response(ReplyType.NETWORK_UNREACHABLE))
 
     def do_bind(self):
         pass
@@ -202,55 +258,56 @@ class Socks5RequestHandler(StreamRequestHandler):
         session = Session(self.connection)
         logging.info('Create session[%s] for %s:%d' % (
             1, self.client_address[0], self.client_address[1]))
-        socks_client = self.connection
-        socks_client.recv(1)
-        method_num, = struct.unpack('b', socks_client.recv(1))
-        methods = struct.unpack('b' * method_num, socks_client.recv(method_num))
+        client = self.connection
+        client.recv(1)
+        method_num, = struct.unpack('b', client.recv(1))
+        methods = struct.unpack('b' * method_num, client.recv(method_num))
         auth = self.server.is_auth()
         if methods.__contains__(SocksMethod.NO_AUTHENTICATION_REQUIRED) and not auth:
-            socks_client.send(b"\x05\x00")
+            client.send(b"\x05\x00")
         elif methods.__contains__(SocksMethod.USERNAME_PASSWORD) and auth:
-            socks_client.send(b"\x05\x02")
+            client.send(b"\x05\x02")
             if not self.__do_username_password_auth():
                 logging.info('Session[%d] authentication failed' % session.get_id())
-                logging.info('Session[%d] closed' % session.get_id())
+                close_session(session)
                 return
         else:
-            socks_client.send(b"\x05\xFF")
+            client.send(b"\x05\xFF")
             return
-        version, command, reserved, address_type = struct.unpack('b' * 4, socks_client.recv(4))
+        version, command, reserved, address_type = struct.unpack('b' * 4, client.recv(4))
         host = None
         port = None
         if address_type == AddressType.IPV4:
-            ip_a, ip_b, ip_c, ip_d, p1, p2 = struct.unpack('b' * 6, socks_client.recv(6))
+            ip_a, ip_b, ip_c, ip_d, p1, p2 = struct.unpack('b' * 6, client.recv(6))
             host = host_from_ip(ip_a, ip_b, ip_c, ip_d)
             port = port_from_byte(p1, p2)
         elif address_type == AddressType.DOMAIN_NAME:
-            host_length, = struct.unpack('b', socks_client.recv(1))
-            host = socks_client.recv(host_length)
-            p1, p2 = struct.unpack('b' * 2, socks_client.recv(2))
+            host_length, = struct.unpack('b', client.recv(1))
+            host = client.recv(host_length)
+            p1, p2 = struct.unpack('b' * 2, client.recv(2))
             port = port_from_byte(p1, p2)
+        else:  # address type not support
+            client.send(build_command_response(ReplyType.ADDRESS_TYPE_NOT_SUPPORTED))
 
         command_executor = CommandExecutor(host, port, session)
         if command == SocksCommand.CONNECT:
             logging.info("Session[%s] Request connect %s:%d" % (session.get_id(), host, port))
             command_executor.do_connect()
+        close_session(session)
 
     def __do_username_password_auth(self):
-        socket = self.connection
-        socket.recv(1)
-        length = byte_to_int(struct.unpack('b', socket.recv(1))[0])
-        username = socket.recv(length)
-        length = byte_to_int(struct.unpack('b', socket.recv(1))[0])
-        password = socket.recv(length)
+        client = self.connection
+        client.recv(1)
+        length = byte_to_int(struct.unpack('b', client.recv(1))[0])
+        username = client.recv(length)
+        length = byte_to_int(struct.unpack('b', client.recv(1))[0])
+        password = client.recv(length)
         user_manager = self.server.get_user_manager()
         if user_manager.check(username, password):
-            socket.send(b"\x01\x00")
+            client.send(b"\x01\x00")
             return True
         else:
-            socket.send(b"\x01\x01")
-
-            socket.close()
+            client.send(b"\x01\x01")
             return False
 
 
@@ -351,6 +408,7 @@ def main():
         console.setFormatter(formatter)
         logging.getLogger().addHandler(console)
 
+    Socks5Server.allow_reuse_address = True
     socks5_server = Socks5Server(port, auth, user_manager)
     try:
         socks5_server.serve_forever()
