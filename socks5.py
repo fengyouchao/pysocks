@@ -218,14 +218,14 @@ class Socks5RequestHandler(StreamRequestHandler):
         else:
             socks_client.send(b"\x05\xFF")
             return
-        version, command, reserved, atype = struct.unpack('b' * 4, socks_client.recv(4))
+        version, command, reserved, address_type = struct.unpack('b' * 4, socks_client.recv(4))
         host = None
         port = None
-        if atype == AddressType.IPV4:
+        if address_type == AddressType.IPV4:
             ip_a, ip_b, ip_c, ip_d, p1, p2 = struct.unpack('b' * 6, socks_client.recv(6))
             host = host_from_ip(ip_a, ip_b, ip_c, ip_d)
             port = port_from_byte(p1, p2)
-        elif atype == AddressType.DOMAIN_NAME:
+        elif address_type == AddressType.DOMAIN_NAME:
             host_length, = struct.unpack('b', socks_client.recv(1))
             host = socks_client.recv(host_length)
             p1, p2 = struct.unpack('b' * 2, socks_client.recv(2))
@@ -342,15 +342,14 @@ def main():
             sys.exit()
     if enable_log:
         logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
-                            datefmt='%a, %d %b %Y %H:%M:%S',
+                            format='%(asctime)s %(levelname)s - %(message)s',
                             filename=log_file,
                             filemode='a')
-        console = logging.StreamHandler()
+        console = logging.StreamHandler(sys.stdout)
         console.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s %(levelname)-5s %(filename)s %(lineno)-3d - %(message)s')
+        formatter = logging.Formatter('%(asctime)s %(levelname)-5s %(lineno)-3d - %(message)s')
         console.setFormatter(formatter)
-        logging.getLogger('').addHandler(console)
+        logging.getLogger().addHandler(console)
 
     socks5_server = Socks5Server(port, auth, user_manager)
     try:
@@ -363,6 +362,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # if not True:
-    #     print "women"
-    # print "h"
