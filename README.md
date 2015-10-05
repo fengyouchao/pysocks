@@ -17,8 +17,8 @@ Python 2.7
 
 
 ```
-    $ git clone https://github.com/fengyouchao/pysocks ~/pysocks
-    $ python ~/pysocks/socks5.py
+    $ git clone https://github.com/fengyouchao/pysocks.git ~/pysocks
+    $ python ~/pysocks/socks5.py start
 ```
 See options
 
