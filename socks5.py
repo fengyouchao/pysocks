@@ -1,12 +1,17 @@
 #!/usr/bin/env python
 from SocketServer import BaseServer, ThreadingTCPServer, StreamRequestHandler
-import logging
 from socket import socket, AF_INET, SOCK_STREAM
+import logging
+import signal
+import struct
 import sys
 import thread
-import struct
+import os
+import platform
 
 __author__ = 'Youchao Feng'
+support_os = ('Darwin', 'Linux')
+current_os = platform.system()
 
 
 def byte_to_int(b):
@@ -60,6 +65,56 @@ def build_command_response(reply):
 def close_session(session):
     session.get_client_socket().close()
     logging.info("Session[%s] closed" % session.get_id())
+
+
+def run_daemon_process(stdout='/dev/null', stderr=None, stdin='/dev/null',
+                       pid_file=None, start_msg='started with pid %s'):
+    """
+         This forks the current process into a daemon.
+         The stdin, stdout, and stderr arguments are file names that
+         will be opened and be used to replace the standard file descriptors
+         in sys.stdin, sys.stdout, and sys.stderr.
+         These arguments are optional and default to /dev/null.
+        Note that stderr is opened unbuffered, so
+        if it shares a file with stdout then interleaved output
+         may not appear in the order that you expect.
+    """
+    # flush io
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # Do first fork.
+    try:
+        if os.fork() > 0:
+            sys.exit(0)  # Exit first parent.
+    except OSError, e:
+        sys.stderr.write("fork #1 failed: (%d) %s\n" % (e.errno, e.strerror))
+        sys.exit(1)
+    # Decouple from parent environment.
+    os.chdir("/")
+    os.umask(0)
+    os.setsid()
+    # Do second fork.
+    try:
+        if os.fork() > 0:
+            sys.exit(0)  # Exit second parent.
+    except OSError, e:
+        sys.stderr.write("fork #2 failed: (%d) %s\n" % (e.errno, e.strerror))
+        sys.exit(1)
+    # Open file descriptors and print start message
+    if not stderr:
+        stderr = stdout
+        si = file(stdin, 'r')
+        so = file(stdout, 'a+')
+        se = file(stderr, 'a+', 0)  # unbuffered
+        pid = str(os.getpid())
+        sys.stderr.write(start_msg % pid)
+        sys.stderr.flush()
+    if pid_file:
+        file(pid_file, 'w+').write("%s\n" % pid)
+    # Redirect standard file descriptors.
+    os.dup2(si.fileno(), sys.stdin.fileno())
+    os.dup2(so.fileno(), sys.stdout.fileno())
+    os.dup2(se.fileno(), sys.stderr.fileno())
 
 
 class Session(object):
@@ -351,7 +406,8 @@ class Socks5Server(ThreadingTCPServer):
 
 
 def show_help():
-    print 'Usage:'
+    print 'Usage: start|stop|restart|status [options]'
+    print 'Options:'
     print '  --port=<val>         Sets server port, default 1080'
     print '  --log=true|false     Logging on, default true'
     print '  --auth:<user:pwd>    Use username/password authentication'
@@ -363,13 +419,66 @@ def show_help():
     print '  -h                   Show Help'
 
 
+def check_os_support():
+    if not support_os.__contains__(current_os):
+        print 'Not support in %s' % current_os
+        sys.exit()
+
+
+def stop(pid_file):
+    check_os_support()
+    print 'Stopping server...',
+    try:
+        f = open(pid_file, 'r')
+        pid = int(f.readline())
+        os.kill(pid, signal.SIGTERM)
+        os.remove(pid_file)
+        print "                 [OK]"
+    except IOError:
+        print "pysocks is not running"
+    except OSError:
+        print "pysocks is not running"
+
+
+def status(pid_file):
+    check_os_support()
+    try:
+        f = open(pid_file, 'r')
+        pid = int(f.readline())
+        print 'pysocks(pid %d) is running...' % pid
+    except IOError:
+        print "pysocks is stopped"
+
+
 def main():
     port = 1080
     enable_log = True
     log_file = 'socks.log'
     auth = False
+    user_home = os.path.expanduser('~')
+    pid_file = user_home + '/.pysocks.pid'
     user_manager = UserManager()
-    for arg in sys.argv[1:]:
+
+    if sys.argv.__len__() < 2:
+        show_help()
+        sys.exit()
+
+    command = sys.argv[1]
+    if command == 'start':
+        pass
+    elif command == 'stop':
+        stop(pid_file)
+        sys.exit()
+    elif command == 'restart':
+        stop(pid_file)
+    elif command == 'status':
+        status(pid_file)
+        sys.exit()
+    else:
+        show_help()
+        sys.exit()
+
+    for arg in sys.argv[2:]:
         if arg.startswith('--port='):
             try:
                 port = int(arg.split('=')[1])
@@ -398,7 +507,7 @@ def main():
             print 'Unknown argument:%s' % arg
             sys.exit()
     if enable_log:
-        logging.basicConfig(level=logging.DEBUG,
+        logging.basicConfig(level=logging.INFO,
                             format='%(asctime)s %(levelname)s - %(message)s',
                             filename=log_file,
                             filemode='a')
@@ -411,6 +520,8 @@ def main():
     Socks5Server.allow_reuse_address = True
     socks5_server = Socks5Server(port, auth, user_manager)
     try:
+        if support_os.__contains__(current_os):
+            run_daemon_process(pid_file=pid_file, start_msg='Start SOCKS5 server at pid %s\n')
         socks5_server.serve_forever()
     except KeyboardInterrupt:
         socks5_server.server_close()
