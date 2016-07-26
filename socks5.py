@@ -313,6 +313,11 @@ class Socks5RequestHandler(StreamRequestHandler):
         session = Session(self.connection)
         logging.info('Create session[%s] for %s:%d' % (
             1, self.client_address[0], self.client_address[1]))
+        print self.server.allowed
+        if self.server.allowed and self.client_address[0] not in self.server.allowed:
+            print 'close......'
+            close_session(session)
+            return
         client = self.connection
         client.recv(1)
         method_num, = struct.unpack('b', client.recv(1))
@@ -371,13 +376,14 @@ class Socks5Server(ThreadingTCPServer):
     SOCKS5 proxy server
     """
 
-    def __init__(self, port, auth=False, user_manager=UserManager()):
+    def __init__(self, port, auth=False, user_manager=UserManager(), allowed=None):
         ThreadingTCPServer.__init__(self, ('', port), Socks5RequestHandler)
         self.__port = port
         self.__users = {}
         self.__auth = auth
         self.__user_manager = user_manager
         self.__sessions = {}
+        self.allowed = allowed
 
     def serve_forever(self, poll_interval=0.5):
         logging.info("Create SOCKS5 server at port %d" % self.__port)
@@ -410,6 +416,7 @@ def show_help():
     print 'Options:'
     print '  --port=<val>         Sets server port, default 1080'
     print '  --log=true|false     Logging on, default true'
+    print '  --allowed=IP         set allowed IP list'
     print '  --auth:<user:pwd>    Use username/password authentication'
     print '                       Example:'
     print '                         Create user \"admin\" with password \"1234\":'
@@ -458,6 +465,7 @@ def main():
     user_home = os.path.expanduser('~')
     pid_file = user_home + '/.pysocks.pid'
     user_manager = UserManager()
+    allowed_ips = None
 
     if sys.argv.__len__() < 2:
         show_help()
@@ -503,6 +511,9 @@ def main():
             else:
                 print '--log=<val>  <val> should be true or false'
                 sys.exit()
+        elif arg.startswith('--allowed='):
+            value = arg.split('=')[1]
+            allowed_ips = value.split(',')
         else:
             print 'Unknown argument:%s' % arg
             sys.exit()
@@ -518,10 +529,10 @@ def main():
         logging.getLogger().addHandler(console)
 
     Socks5Server.allow_reuse_address = True
-    socks5_server = Socks5Server(port, auth, user_manager)
+    socks5_server = Socks5Server(port, auth, user_manager, allowed=allowed_ips)
     try:
-        if support_os.__contains__(current_os):
-            run_daemon_process(pid_file=pid_file, start_msg='Start SOCKS5 server at pid %s\n')
+        # if support_os.__contains__(current_os):
+        #     run_daemon_process(pid_file=pid_file, start_msg='Start SOCKS5 server at pid %s\n')
         socks5_server.serve_forever()
     except KeyboardInterrupt:
         socks5_server.server_close()
