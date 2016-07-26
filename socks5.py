@@ -315,7 +315,6 @@ class Socks5RequestHandler(StreamRequestHandler):
             1, self.client_address[0], self.client_address[1]))
         print self.server.allowed
         if self.server.allowed and self.client_address[0] not in self.server.allowed:
-            print 'close......'
             close_session(session)
             return
         client = self.connection
@@ -531,8 +530,8 @@ def main():
     Socks5Server.allow_reuse_address = True
     socks5_server = Socks5Server(port, auth, user_manager, allowed=allowed_ips)
     try:
-        # if support_os.__contains__(current_os):
-        #     run_daemon_process(pid_file=pid_file, start_msg='Start SOCKS5 server at pid %s\n')
+        if support_os.__contains__(current_os):
+            run_daemon_process(pid_file=pid_file, start_msg='Start SOCKS5 server at pid %s\n')
         socks5_server.serve_forever()
     except KeyboardInterrupt:
         socks5_server.server_close()
