@@ -153,9 +153,9 @@ class Session:
 
 
 class AddressType:
-    IPV4 = 1
+    IPV4        = 1
     DOMAIN_NAME = 3
-    IPV6 = 4
+    IPV6        = 4
 
 
 class SocksCommand:
@@ -262,7 +262,9 @@ class CommandExecutor:
         Do SOCKS CONNECT method
         :return: None
         """
-        result = self.__proxy_socket.connect_ex(self.__get_address())
+        address = self.__get_address()
+        logging.info("Connect request to %s", address)
+        result = self.__proxy_socket.connect_ex(address)
         if result == 0:
             self.__client.send(build_command_response(ReplyType.SUCCEEDED))
             socket_pipe = SocketPipe(self.__client, self.__proxy_socket)
@@ -333,14 +335,16 @@ class Socks5RequestHandler(StreamRequestHandler):
     def handle(self):
         session = Session(self.connection)
         logging.info('Create session[%s] for %s:%d', 1, self.client_address[0], self.client_address[1])
-        print(self.server.allowed)
+        # print(self.server.allowed)
         if self.server.allowed and self.client_address[0] not in self.server.allowed:
+            logging.info('Remote IP not in allowed list. Closing connection')
             close_session(session)
             return
         client = self.connection
         client.recv(1)
         method_num, = struct.unpack('b', client.recv(1))
-        methods = struct.unpack('b' * method_num, client.recv(method_num))
+        meth_bytes = client.recv(method_num)
+        methods = struct.unpack('b' * method_num, meth_bytes)
         auth = self.server.is_auth()
         if methods.__contains__(SocksMethod.NO_AUTHENTICATION_REQUIRED) and not auth:
             client.send(b"\x05\x00")
@@ -351,26 +355,41 @@ class Socks5RequestHandler(StreamRequestHandler):
                 close_session(session)
                 return
         else:
+            logging.info('Client requested unknown method (%s, %s->%s). Cannot continue.', methods, method_num, meth_bytes)
             client.send(b"\x05\xFF")
             return
-        version, command, reserved, address_type = struct.unpack('b' * 4, client.recv(4))
+
+        version, command, reserved, address_type = struct.unpack('B' * 4, client.recv(4))
         host = None
         port = None
         if address_type == AddressType.IPV4:
-            ip_a, ip_b, ip_c, ip_d, p1, p2 = struct.unpack('b' * 6, client.recv(6))
+            ip_a, ip_b, ip_c, ip_d, port = struct.unpack('!' + ('b' * 4) + 'H', client.recv(6))
             host = host_from_ip(ip_a, ip_b, ip_c, ip_d)
-            port = port_from_byte(p1, p2)
         elif address_type == AddressType.DOMAIN_NAME:
             host_length, = struct.unpack('b', client.recv(1))
             host = client.recv(host_length)
-            p1, p2 = struct.unpack('b' * 2, client.recv(2))
-            port = port_from_byte(p1, p2)
-        else:  # address type not support
+            port,  = struct.unpack('!H', client.recv(2))
+        elif address_type == AddressType.IPV6:
+            ip6_01, ip6_02, ip6_03, ip6_04,  \
+                ip6_05, ip6_06, ip6_07, ip6_08,  \
+                ip6_09, ip6_10, ip6_11, ip6_12,  \
+                ip6_13, ip6_14, ip6_15, ip6_16,  \
+                port = struct.unpack('!' + ('b' * 16) + 'H', client.recv(18))
+
+            logging.warn("Address type not implemented: %s (IPV6 Connect)", address_type)
+            logging.info("Params: %s, port: %s", (ip6_01, ip6_02, ip6_03, ip6_04, ip6_05, ip6_06, ip6_07, ip6_08, ip6_09, ip6_10, ip6_11, ip6_12, ip6_13, ip6_14, ip6_15, ip6_16), port)
             client.send(build_command_response(ReplyType.ADDRESS_TYPE_NOT_SUPPORTED))
+            return
+
+        else:  # address type not support
+            logging.warn("Address type not supported: %s", address_type)
+            client.send(build_command_response(ReplyType.ADDRESS_TYPE_NOT_SUPPORTED))
+            return
+
 
         command_executor = CommandExecutor(host, port, session)
         if command == SocksCommand.CONNECT:
-            logging.info("Session[%s] Request connect %s:%d", session.get_id(), host, port)
+            logging.info("Session[%s] Request connect %s:%s", session.get_id(), host, port)
             command_executor.do_connect()
         close_session(session)
 
