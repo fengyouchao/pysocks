@@ -1,18 +1,32 @@
-#!/usr/bin/env python
-from SocketServer import BaseServer, ThreadingTCPServer, StreamRequestHandler
-from socket import socket, AF_INET, SOCK_STREAM
+#!/usr/bin/env python3
+
+'''
+From https://github.com/fengyouchao/pysocks
+Py3K fixes by Connor Wolf.
+
+'''
+
+
 import logging
 import signal
 import struct
 import sys
-import thread
+import threading
 import os
 import platform
+
+from socketserver import BaseServer
+from socketserver import ThreadingTCPServer
+from socketserver import StreamRequestHandler
+from socket import socket
+from socket import AF_INET
+from socket import SOCK_STREAM
 
 __author__ = 'Youchao Feng'
 support_os = ('Darwin', 'Linux')
 current_os = platform.system()
 
+# pylint: disable=R1705
 
 def byte_to_int(b):
     """
@@ -25,7 +39,6 @@ def byte_to_int(b):
 
 def port_from_byte(b1, b2):
     """
-
     :param b1: First byte of port
     :param b2: Second byte of port
     :return: Port in Int
@@ -64,11 +77,14 @@ def build_command_response(reply):
 
 def close_session(session):
     session.get_client_socket().close()
-    logging.info("Session[%s] closed" % session.get_id())
+    logging.info("Session[%s] closed", session.get_id())
 
 
-def run_daemon_process(stdout='/dev/null', stderr=None, stdin='/dev/null',
-                       pid_file=None, start_msg='started with pid %s'):
+def run_daemon_process(stdout    = '/dev/null',
+                       stderr    = None,
+                       stdin     = '/dev/null',
+                       pid_file  = None,
+                       start_msg = 'started with pid %s'):
     """
          This forks the current process into a daemon.
          The stdin, stdout, and stderr arguments are file names that
@@ -86,7 +102,7 @@ def run_daemon_process(stdout='/dev/null', stderr=None, stdin='/dev/null',
     try:
         if os.fork() > 0:
             sys.exit(0)  # Exit first parent.
-    except OSError, e:
+    except OSError as e:
         sys.stderr.write("fork #1 failed: (%d) %s\n" % (e.errno, e.strerror))
         sys.exit(1)
     # Decouple from parent environment.
@@ -97,27 +113,27 @@ def run_daemon_process(stdout='/dev/null', stderr=None, stdin='/dev/null',
     try:
         if os.fork() > 0:
             sys.exit(0)  # Exit second parent.
-    except OSError, e:
+    except OSError as e:
         sys.stderr.write("fork #2 failed: (%d) %s\n" % (e.errno, e.strerror))
         sys.exit(1)
     # Open file descriptors and print start message
     if not stderr:
         stderr = stdout
-        si = file(stdin, 'r')
-        so = file(stdout, 'a+')
-        se = file(stderr, 'a+', 0)  # unbuffered
+        si = open(stdin, 'r')
+        so = open(stdout, 'a+')
+        se = open(stderr, 'ba+', 0)  # unbuffered
         pid = str(os.getpid())
         sys.stderr.write(start_msg % pid)
         sys.stderr.flush()
     if pid_file:
-        file(pid_file, 'w+').write("%s\n" % pid)
+        open(pid_file, 'w+').write("%s\n" % pid)
     # Redirect standard file descriptors.
     os.dup2(si.fileno(), sys.stdin.fileno())
     os.dup2(so.fileno(), sys.stdout.fileno())
     os.dup2(se.fileno(), sys.stderr.fileno())
 
 
-class Session(object):
+class Session:
     index = 0
 
     def __init__(self, client_socket):
@@ -136,25 +152,25 @@ class Session(object):
         return self.__client_socket
 
 
-class AddressType(object):
+class AddressType:
     IPV4 = 1
     DOMAIN_NAME = 3
     IPV6 = 4
 
 
-class SocksCommand(object):
+class SocksCommand:
     CONNECT = 1
     BIND = 2
     UDP_ASSOCIATE = 3
 
 
-class SocksMethod(object):
+class SocksMethod:
     NO_AUTHENTICATION_REQUIRED = 0
     GSS_API = 1
     USERNAME_PASSWORD = 2
 
 
-class ServerReply(object):
+class ServerReply:
     def __init__(self, value):
         self.__value = value
 
@@ -182,25 +198,28 @@ class ServerReply(object):
         return self.__value
 
 
-class ReplyType(object):
-    SUCCEEDED = ServerReply(0)
-    GENERAL_SOCKS_SERVER_FAILURE = ServerReply(1)
+class ReplyType:
+    SUCCEEDED                         = ServerReply(0)
+    GENERAL_SOCKS_SERVER_FAILURE      = ServerReply(1)
     CONNECTION_NOT_ALLOWED_BY_RULESET = ServerReply(2)
-    NETWORK_UNREACHABLE = ServerReply(3)
-    HOST_UNREACHABLE = ServerReply(4)
-    CONNECTION_REFUSED = ServerReply(5)
-    TTL_EXPIRED = ServerReply(6)
-    COMMAND_NOT_SUPPORTED = ServerReply(7)
-    ADDRESS_TYPE_NOT_SUPPORTED = ServerReply(8)
+    NETWORK_UNREACHABLE               = ServerReply(3)
+    HOST_UNREACHABLE                  = ServerReply(4)
+    CONNECTION_REFUSED                = ServerReply(5)
+    TTL_EXPIRED                       = ServerReply(6)
+    COMMAND_NOT_SUPPORTED             = ServerReply(7)
+    ADDRESS_TYPE_NOT_SUPPORTED        = ServerReply(8)
 
 
-class SocketPipe(object):
+class SocketPipe:
     BUFFER_SIZE = 1024 * 1024
 
     def __init__(self, socket1, socket2):
         self._socket1 = socket1
         self._socket2 = socket2
         self.__running = False
+
+        self.t1 = threading.Thread(target=self.__transfer, args=(self._socket1, self._socket2))
+        self.t2 = threading.Thread(target=self.__transfer, args=(self._socket2, self._socket1))
 
     def __transfer(self, socket1, socket2):
         while self.__running:
@@ -216,8 +235,10 @@ class SocketPipe(object):
 
     def start(self):
         self.__running = True
-        thread.start_new_thread(self.__transfer, (self._socket1, self._socket2))
-        thread.start_new_thread(self.__transfer, (self._socket2, self._socket1))
+
+        self.t1.start()
+        self.t2.start()
+
 
     def stop(self):
         self._socket1.close()
@@ -228,7 +249,7 @@ class SocketPipe(object):
         return self.__running
 
 
-class CommandExecutor(object):
+class CommandExecutor:
     def __init__(self, remote_server_host, remote_server_port, session):
         self.__proxy_socket = socket(AF_INET, SOCK_STREAM)
         self.__remote_server_host = remote_server_host
@@ -253,7 +274,7 @@ class CommandExecutor(object):
         elif result == 61:
             self.__client.send(build_command_response(ReplyType.NETWORK_UNREACHABLE))
         else:
-            logging.error('Connection Error:[%s] is unknown' % result)
+            logging.error('Connection Error:[%s] is unknown', result)
             self.__client.send(build_command_response(ReplyType.NETWORK_UNREACHABLE))
 
     def do_bind(self):
@@ -266,7 +287,7 @@ class CommandExecutor(object):
         return self.__remote_server_host, self.__remote_server_port
 
 
-class User(object):
+class User:
     def __init__(self, username, password):
         self.__username = username
         self.__password = password
@@ -281,7 +302,7 @@ class User(object):
         return '<user: username=%s, password=%s>' % (self.get_username(), self.__password)
 
 
-class UserManager(object):
+class UserManager:
     def __init__(self):
         self.__users = {}
 
@@ -311,9 +332,8 @@ class Socks5RequestHandler(StreamRequestHandler):
 
     def handle(self):
         session = Session(self.connection)
-        logging.info('Create session[%s] for %s:%d' % (
-            1, self.client_address[0], self.client_address[1]))
-        print self.server.allowed
+        logging.info('Create session[%s] for %s:%d', 1, self.client_address[0], self.client_address[1])
+        print(self.server.allowed)
         if self.server.allowed and self.client_address[0] not in self.server.allowed:
             close_session(session)
             return
@@ -327,7 +347,7 @@ class Socks5RequestHandler(StreamRequestHandler):
         elif methods.__contains__(SocksMethod.USERNAME_PASSWORD) and auth:
             client.send(b"\x05\x02")
             if not self.__do_username_password_auth():
-                logging.info('Session[%d] authentication failed' % session.get_id())
+                logging.info('Session[%d] authentication failed', session.get_id())
                 close_session(session)
                 return
         else:
@@ -350,7 +370,7 @@ class Socks5RequestHandler(StreamRequestHandler):
 
         command_executor = CommandExecutor(host, port, session)
         if command == SocksCommand.CONNECT:
-            logging.info("Session[%s] Request connect %s:%d" % (session.get_id(), host, port))
+            logging.info("Session[%s] Request connect %s:%d", session.get_id(), host, port)
             command_executor.do_connect()
         close_session(session)
 
@@ -377,15 +397,17 @@ class Socks5Server(ThreadingTCPServer):
 
     def __init__(self, port, auth=False, user_manager=UserManager(), allowed=None):
         ThreadingTCPServer.__init__(self, ('', port), Socks5RequestHandler)
-        self.__port = port
-        self.__users = {}
-        self.__auth = auth
+        self.__port         = port
+        self.__users        = {}
+        self.__auth         = auth
         self.__user_manager = user_manager
-        self.__sessions = {}
-        self.allowed = allowed
+        self.__sessions     = {}
+        self.allowed        = allowed
+
+        self.th             = threading.Thread(target=self.serve_forever)
 
     def serve_forever(self, poll_interval=0.5):
-        logging.info("Create SOCKS5 server at port %d" % self.__port)
+        logging.info("Create SOCKS5 server at port %d", self.__port)
         ThreadingTCPServer.serve_forever(self, poll_interval)
 
     def finish_request(self, request, client_address):
@@ -409,41 +431,49 @@ class Socks5Server(ThreadingTCPServer):
     def set_user_manager(self, user_manager):
         self.__user_manager = user_manager
 
+    def run_in_thread(self):
+        self.th.start()
+
+    def stop_server_thread(self):
+        self.server_close()
+        self.shutdown()
+        self.th.join()
 
 def show_help():
-    print 'Usage: start|stop|restart|status [options]'
-    print 'Options:'
-    print '  --port=<val>         Sets server port, default 1080'
-    print '  --log=true|false     Logging on, default true'
-    print '  --allowed=IP         set allowed IP list'
-    print '  --auth:<user:pwd>    Use username/password authentication'
-    print '                       Example:'
-    print '                         Create user \"admin\" with password \"1234\":'
-    print '                           --auth=admin:1234 '
-    print '                         Create tow users:'
-    print '                           --auth=admin:1234,root:1234'
-    print '  -h                   Show Help'
+    print('Usage: start|stop|restart|status [options]')
+    print('Options:')
+    print('  --port=<val>         Sets server port, default 1080')
+    print('  --log=true|false     Logging on, default true')
+    print('  --allowed=IP         set allowed IP list')
+    print('  --auth:<user:pwd>    Use username/password authentication')
+    print('                       Example:')
+    print('                         Create user \"admin\" with password \"1234\":')
+    print('                           --auth=admin:1234 ')
+    print('                         Create tow users:')
+    print('                           --auth=admin:1234,root:1234')
+    print('  -h                   Show Help')
+    print('  -f                   Stay in foreground (prevents daemonization)')
 
 
 def check_os_support():
     if not support_os.__contains__(current_os):
-        print 'Not support in %s' % current_os
+        print('Not support in %s' % current_os)
         sys.exit()
 
 
 def stop(pid_file):
     check_os_support()
-    print 'Stopping server...',
+    print('Stopping server...', end=' ')
     try:
         f = open(pid_file, 'r')
         pid = int(f.readline())
         os.kill(pid, signal.SIGTERM)
         os.remove(pid_file)
-        print "                 [OK]"
-    except IOError:
-        print "pysocks is not running"
+        print("                 [OK]")
     except OSError:
-        print "pysocks is not running"
+        print("pysocks is not running")
+    except IOError:
+        print("pysocks is not running")
 
 
 def status(pid_file):
@@ -451,20 +481,21 @@ def status(pid_file):
     try:
         f = open(pid_file, 'r')
         pid = int(f.readline())
-        print 'pysocks(pid %d) is running...' % pid
+        print('pysocks(pid %d) is running...' % pid)
     except IOError:
-        print "pysocks is stopped"
+        print("pysocks is stopped")
 
 
 def main():
-    port = 1080
-    enable_log = True
-    log_file = 'socks.log'
-    auth = False
-    user_home = os.path.expanduser('~')
-    pid_file = user_home + '/.pysocks.pid'
-    user_manager = UserManager()
-    allowed_ips = None
+    port              = 1080
+    enable_log        = True
+    log_file          = 'socks.log'
+    auth              = False
+    user_home         = os.path.expanduser('~')
+    pid_file          = user_home + '/.pysocks.pid'
+    user_manager      = UserManager()
+    allowed_ips       = None
+    should_daemonisze = True
 
     if sys.argv.__len__() < 2:
         show_help()
@@ -490,7 +521,7 @@ def main():
             try:
                 port = int(arg.split('=')[1])
             except ValueError:
-                print '--port=<val>  <val> should be a number'
+                print('--port=<val>  <val> should be a number')
                 sys.exit()
         elif arg.startswith('--auth'):
             auth = True
@@ -501,6 +532,8 @@ def main():
         elif arg == '-h':
             show_help()
             sys.exit()
+        elif arg == '-f':
+            should_daemonisze = False
         elif arg.startswith('--log='):
             value = arg.split('=')[1]
             if value == 'true':
@@ -508,13 +541,13 @@ def main():
             elif value == 'false':
                 enable_log = False
             else:
-                print '--log=<val>  <val> should be true or false'
+                print('--log=<val>  <val> should be true or false')
                 sys.exit()
         elif arg.startswith('--allowed='):
             value = arg.split('=')[1]
             allowed_ips = value.split(',')
         else:
-            print 'Unknown argument:%s' % arg
+            print('Unknown argument:%s' % arg)
             sys.exit()
     if enable_log:
         logging.basicConfig(level=logging.INFO,
@@ -530,7 +563,7 @@ def main():
     Socks5Server.allow_reuse_address = True
     socks5_server = Socks5Server(port, auth, user_manager, allowed=allowed_ips)
     try:
-        if support_os.__contains__(current_os):
+        if support_os.__contains__(current_os) and should_daemonisze:
             run_daemon_process(pid_file=pid_file, start_msg='Start SOCKS5 server at pid %s\n')
         socks5_server.serve_forever()
     except KeyboardInterrupt:
