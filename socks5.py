@@ -420,7 +420,7 @@ def show_help():
     print '                       Example:'
     print '                         Create user \"admin\" with password \"1234\":'
     print '                           --auth=admin:1234 '
-    print '                         Create tow users:'
+    print '                         Create two users:'
     print '                           --auth=admin:1234,root:1234'
     print '  -h                   Show Help'
 
