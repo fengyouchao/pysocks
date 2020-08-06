@@ -1,32 +1,20 @@
 #!/usr/bin/env python3
 
-'''
-From https://github.com/fengyouchao/pysocks
-Py3K fixes by Connor Wolf.
-
-'''
-
-
+import argparse
 import logging
+import os
+import platform
 import signal
 import struct
 import sys
 import threading
-import os
-import platform
-
-from socketserver import BaseServer
-from socketserver import ThreadingTCPServer
-from socketserver import StreamRequestHandler
-from socket import socket
-from socket import AF_INET
-from socket import SOCK_STREAM
+from socket import AF_INET, SOCK_STREAM, socket
+from socketserver import BaseServer, StreamRequestHandler, ThreadingTCPServer
 
 __author__ = 'Youchao Feng'
 support_os = ('Darwin', 'Linux')
 current_os = platform.system()
 
-# pylint: disable=R1705
 
 def byte_to_int(b):
     """
@@ -80,11 +68,11 @@ def close_session(session):
     logging.info("Session[%s] closed", session.get_id())
 
 
-def run_daemon_process(stdout    = '/dev/null',
-                       stderr    = None,
-                       stdin     = '/dev/null',
-                       pid_file  = None,
-                       start_msg = 'started with pid %s'):
+def run_daemon_process(stdout='/dev/null',
+                       stderr=None,
+                       stdin='/dev/null',
+                       pid_file=None,
+                       start_msg='started with pid %s'):
     """
          This forks the current process into a daemon.
          The stdin, stdout, and stderr arguments are file names that
@@ -153,9 +141,9 @@ class Session:
 
 
 class AddressType:
-    IPV4        = 1
+    IPV4 = 1
     DOMAIN_NAME = 3
-    IPV6        = 4
+    IPV6 = 4
 
 
 class SocksCommand:
@@ -199,15 +187,15 @@ class ServerReply:
 
 
 class ReplyType:
-    SUCCEEDED                         = ServerReply(0)
-    GENERAL_SOCKS_SERVER_FAILURE      = ServerReply(1)
+    SUCCEEDED = ServerReply(0)
+    GENERAL_SOCKS_SERVER_FAILURE = ServerReply(1)
     CONNECTION_NOT_ALLOWED_BY_RULESET = ServerReply(2)
-    NETWORK_UNREACHABLE               = ServerReply(3)
-    HOST_UNREACHABLE                  = ServerReply(4)
-    CONNECTION_REFUSED                = ServerReply(5)
-    TTL_EXPIRED                       = ServerReply(6)
-    COMMAND_NOT_SUPPORTED             = ServerReply(7)
-    ADDRESS_TYPE_NOT_SUPPORTED        = ServerReply(8)
+    NETWORK_UNREACHABLE = ServerReply(3)
+    HOST_UNREACHABLE = ServerReply(4)
+    CONNECTION_REFUSED = ServerReply(5)
+    TTL_EXPIRED = ServerReply(6)
+    COMMAND_NOT_SUPPORTED = ServerReply(7)
+    ADDRESS_TYPE_NOT_SUPPORTED = ServerReply(8)
 
 
 class SocketPipe:
@@ -238,7 +226,6 @@ class SocketPipe:
 
         self.t1.start()
         self.t2.start()
-
 
     def stop(self):
         self._socket1.close()
@@ -355,7 +342,8 @@ class Socks5RequestHandler(StreamRequestHandler):
                 close_session(session)
                 return
         else:
-            logging.info('Client requested unknown method (%s, %s->%s). Cannot continue.', methods, method_num, meth_bytes)
+            logging.info('Client requested unknown method (%s, %s->%s). Cannot continue.', methods, method_num,
+                         meth_bytes)
             client.send(b"\x05\xFF")
             return
 
@@ -368,16 +356,18 @@ class Socks5RequestHandler(StreamRequestHandler):
         elif address_type == AddressType.DOMAIN_NAME:
             host_length, = struct.unpack('b', client.recv(1))
             host = client.recv(host_length)
-            port,  = struct.unpack('!H', client.recv(2))
+            port, = struct.unpack('!H', client.recv(2))
         elif address_type == AddressType.IPV6:
-            ip6_01, ip6_02, ip6_03, ip6_04,  \
-                ip6_05, ip6_06, ip6_07, ip6_08,  \
-                ip6_09, ip6_10, ip6_11, ip6_12,  \
-                ip6_13, ip6_14, ip6_15, ip6_16,  \
-                port = struct.unpack('!' + ('b' * 16) + 'H', client.recv(18))
+            ip6_01, ip6_02, ip6_03, ip6_04, \
+            ip6_05, ip6_06, ip6_07, ip6_08, \
+            ip6_09, ip6_10, ip6_11, ip6_12, \
+            ip6_13, ip6_14, ip6_15, ip6_16, \
+            port = struct.unpack('!' + ('b' * 16) + 'H', client.recv(18))
 
             logging.warn("Address type not implemented: %s (IPV6 Connect)", address_type)
-            logging.info("Params: %s, port: %s", (ip6_01, ip6_02, ip6_03, ip6_04, ip6_05, ip6_06, ip6_07, ip6_08, ip6_09, ip6_10, ip6_11, ip6_12, ip6_13, ip6_14, ip6_15, ip6_16), port)
+            logging.info("Params: %s, port: %s", (
+                ip6_01, ip6_02, ip6_03, ip6_04, ip6_05, ip6_06, ip6_07, ip6_08, ip6_09, ip6_10, ip6_11, ip6_12, ip6_13,
+                ip6_14, ip6_15, ip6_16), port)
             client.send(build_command_response(ReplyType.ADDRESS_TYPE_NOT_SUPPORTED))
             return
 
@@ -385,7 +375,6 @@ class Socks5RequestHandler(StreamRequestHandler):
             logging.warn("Address type not supported: %s", address_type)
             client.send(build_command_response(ReplyType.ADDRESS_TYPE_NOT_SUPPORTED))
             return
-
 
         command_executor = CommandExecutor(host, port, session)
         if command == SocksCommand.CONNECT:
@@ -416,14 +405,14 @@ class Socks5Server(ThreadingTCPServer):
 
     def __init__(self, port, auth=False, user_manager=UserManager(), allowed=None):
         ThreadingTCPServer.__init__(self, ('', port), Socks5RequestHandler)
-        self.__port         = port
-        self.__users        = {}
-        self.__auth         = auth
+        self.__port = port
+        self.__users = {}
+        self.__auth = auth
         self.__user_manager = user_manager
-        self.__sessions     = {}
-        self.allowed        = allowed
+        self.__sessions = {}
+        self.allowed = allowed
 
-        self.th             = threading.Thread(target=self.serve_forever)
+        self.th = threading.Thread(target=self.serve_forever)
 
     def serve_forever(self, poll_interval=0.5):
         logging.info("Create SOCKS5 server at port %d", self.__port)
@@ -458,21 +447,6 @@ class Socks5Server(ThreadingTCPServer):
         self.shutdown()
         self.th.join()
 
-def show_help():
-    print('Usage: start|stop|restart|status [options]')
-    print('Options:')
-    print('  --port=<val>         Sets server port, default 1080')
-    print('  --log=true|false     Logging on, default true')
-    print('  --allowed=IP         set allowed IP list')
-    print('  --auth:<user:pwd>    Use username/password authentication')
-    print('                       Example:')
-    print('                         Create user \"admin\" with password \"1234\":')
-    print('                           --auth=admin:1234 ')
-    print('                         Create tow users:')
-    print('                           --auth=admin:1234,root:1234')
-    print('  -h                   Show Help')
-    print('  -f                   Stay in foreground (prevents daemonization)')
-
 
 def check_os_support():
     if not support_os.__contains__(current_os):
@@ -505,69 +479,17 @@ def status(pid_file):
         print("pysocks is stopped")
 
 
-def main():
-    port              = 1080
-    enable_log        = True
-    log_file          = 'socks.log'
-    auth              = False
-    user_home         = os.path.expanduser('~')
-    pid_file          = user_home + '/.pysocks.pid'
-    user_manager      = UserManager()
-    allowed_ips       = None
-    should_daemonisze = True
-
-    if sys.argv.__len__() < 2:
-        show_help()
-        sys.exit()
-
-    command = sys.argv[1]
-    if command == 'start':
-        pass
-    elif command == 'stop':
-        stop(pid_file)
-        sys.exit()
-    elif command == 'restart':
-        stop(pid_file)
-    elif command == 'status':
-        status(pid_file)
-        sys.exit()
-    else:
-        show_help()
-        sys.exit()
-
-    for arg in sys.argv[2:]:
-        if arg.startswith('--port='):
-            try:
-                port = int(arg.split('=')[1])
-            except ValueError:
-                print('--port=<val>  <val> should be a number')
-                sys.exit()
-        elif arg.startswith('--auth'):
-            auth = True
-            users = arg.split('=')[1]
-            for user in users.split(','):
-                user_pwd = user.split(':')
-                user_manager.add_user(User(user_pwd[0], user_pwd[1]))
-        elif arg == '-h':
-            show_help()
-            sys.exit()
-        elif arg == '-f':
-            should_daemonisze = False
-        elif arg.startswith('--log='):
-            value = arg.split('=')[1]
-            if value == 'true':
-                enable_log = True
-            elif value == 'false':
-                enable_log = False
-            else:
-                print('--log=<val>  <val> should be true or false')
-                sys.exit()
-        elif arg.startswith('--allowed='):
-            value = arg.split('=')[1]
-            allowed_ips = value.split(',')
-        else:
-            print('Unknown argument:%s' % arg)
-            sys.exit()
+def start_command(args):
+    enable_log = True
+    log_file = args.logfile
+    auth = args.auth is not None
+    pid_file = args.pidfile
+    user_manager = UserManager()
+    should_daemonisze = not args.foreground
+    if auth:
+        for user in args.auth:
+            user_pwd = user.split(':')
+            user_manager.add_user(User(user_pwd[0], user_pwd[1]))
     if enable_log:
         logging.basicConfig(level=logging.INFO,
                             format='%(asctime)s %(levelname)s - %(message)s',
@@ -580,7 +502,7 @@ def main():
         logging.getLogger().addHandler(console)
 
     Socks5Server.allow_reuse_address = True
-    socks5_server = Socks5Server(port, auth, user_manager, allowed=allowed_ips)
+    socks5_server = Socks5Server(args.port, auth, user_manager, allowed=args.allow_ip)
     try:
         if support_os.__contains__(current_os) and should_daemonisze:
             run_daemon_process(pid_file=pid_file, start_msg='Start SOCKS5 server at pid %s\n')
@@ -589,6 +511,47 @@ def main():
         socks5_server.server_close()
         socks5_server.shutdown()
         logging.info("SOCKS5 server shutdown")
+
+
+def stop_command(args):
+    pid_file = pid_file = args.pidfile
+    stop(pid_file)
+    sys.exit()
+
+
+def status_command(args):
+    pid_file = args.pidfile
+    status(pid_file)
+    sys.exit()
+
+
+def main():
+    default_pid_file = os.path.join(os.path.expanduser('~'), '.pysocks.pid')
+    default_log_file = os.path.join(os.path.expanduser('~'), 'pysocks.log')
+    parser = argparse.ArgumentParser(description='start a simple socks5 server',
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    subparsers = parser.add_subparsers(help='sub-command help')
+    parser_start = subparsers.add_parser('start', help='start a SOCKS5 server', description='start a SOCKS5 server',
+                                         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser_start.add_argument('-p', '--port', type=int, help='specify server port, default 1080', default=1080)
+    parser_start.add_argument('-f', '--foreground', help='stay in foreground (prevents daemonization)',
+                              action='store_true', default=False)
+    parser_start.add_argument('-i', '--allow-ip', nargs='+', help='allowed client IP list')
+    parser_start.add_argument('-a', '--auth', nargs='+', help='allowed users')
+    parser_start.add_argument('-L', '--logfile', help='log file', default=default_log_file)
+    parser_start.add_argument('-P', '--pidfile', help='pid file', default=default_pid_file)
+    parser_start.set_defaults(func=start_command)
+    parser_stop = subparsers.add_parser('stop', help='stop a SOCKS5 server', description='stop a SOCKS5 server',
+                                        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser_stop.add_argument('-P', '--pidfile', help='pid file', default=default_pid_file)
+    parser_stop.set_defaults(func=stop_command)
+    parser_status = subparsers.add_parser('status', help='print SOCKS5 server status',
+                                          description='print SOCKS5 server status',
+                                          formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser_status.add_argument('-P', '--pidfile', help='pid file', default=default_pid_file)
+    parser_status.set_defaults(func=status_command)
+    args = parser.parse_args()
+    args.func(args)
 
 
 if __name__ == '__main__':
