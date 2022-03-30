@@ -551,7 +551,12 @@ def main():
     parser_status.add_argument('-P', '--pidfile', help='pid file', default=default_pid_file)
     parser_status.set_defaults(func=status_command)
     args = parser.parse_args()
-    args.func(args)
+
+    try:
+        func = args.func
+    except AttributeError:
+        parser.error("too few arguments")
+    func(args)
 
 
 if __name__ == '__main__':
